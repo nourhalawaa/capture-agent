@@ -95,9 +95,6 @@ python capture.py "https://youtube.com/watch?v=..."
 **Planned:**
 
 - [ ] **v2:** OCR on video frames for slide/text-heavy content
-- [ ] Arabic transcription tuning (Whisper large-v3 on GPU path)
-- [ ] Windows auto-start via Task Scheduler
-- [ ] Auto-ingest into LLM-powered wiki (embedding + linking)
 
 ## Author
 
