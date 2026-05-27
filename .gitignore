@@ -1,0 +1,18 @@
+# Virtual environment
+.venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Secrets
+.env
+
+# Temp downloads
+temp/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
