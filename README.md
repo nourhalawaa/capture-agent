@@ -2,6 +2,12 @@
 
 Send a video link to Telegram. Get a structured markdown note in your wiki.
 
+## Background
+
+This project is built as an extension to [Andrej Karpathy's LLM Wiki concept](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) — a pattern where an LLM maintains a persistent, compounding knowledge wiki from raw sources. The idea is that you keep feeding raw material into a `raw/` folder and let the LLM process, link, and build on it over time.
+
+Capture Agent solves the friction problem of getting video content into that wiki. Reels, YouTube videos, TikToks — the kind of content that's easy to consume and hard to retain. Instead of manually transcribing or copy-pasting, you send a link and the pipeline handles extraction, transcription, and formatting automatically. The output drops directly into `raw/`, ready for the LLM to ingest.
+
 ## What it does
 
 Zero-friction media capture pipeline. You send a YouTube, TikTok, or Instagram link to a Telegram bot — it downloads the video, transcribes the audio with Whisper, formats everything into a clean markdown note, and drops it directly into your wiki's `raw/` folder. No browser extensions, no manual copy-paste, no open tabs to deal with later.
@@ -95,6 +101,7 @@ python capture.py "https://youtube.com/watch?v=..."
 **Planned:**
 
 - [ ] **v2:** OCR on video frames for slide/text-heavy content
+
 
 ## Author
 
