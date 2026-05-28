@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Python 3.12.3**, venv at `.venv/`
 - **ffmpeg 8.1.1** installed via winget — must be on PATH (requires a fresh shell after install). Needed by `faster-whisper` for audio demuxing.
 - Activate venv: `.\.venv\Scripts\Activate.ps1` (PowerShell); use `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned` once if blocked.
-- `TELEGRAM_BOT_TOKEN` must be set in `.env` before running `bot.py`.
+- `.env` must be configured before running — see `.env.example`. Required keys: `TELEGRAM_BOT_TOKEN`, `RAW_FOLDER`.
 
 ## Common commands
 
@@ -47,7 +47,7 @@ URL
 
 ## Key conventions
 
-**`config.py`** — single source of truth for constants: `WHISPER_MODEL`, `WHISPER_DEVICE`, `WHISPER_COMPUTE`, and `RAW_FOLDER` (set to the absolute path of your Wiki `raw/` folder).
+**`config.py`** — single source of truth for constants: `WHISPER_MODEL`, `WHISPER_DEVICE`, `WHISPER_COMPUTE`, and `RAW_FOLDER`. Calls `load_dotenv()` at import time; `RAW_FOLDER` is read from `.env` with a fallback default. Never hardcode paths here.
 
 **`pipeline/downloader.py`**
 - Downloads to `temp/` (project root, gitignored) using `%(id)s.%(ext)s` as filename — avoids unicode issues.

@@ -1,6 +1,12 @@
 # Capture Agent
 
-Send a video link to Telegram. Get a structured markdown note in your wiki.
+![Python](https://img.shields.io/badge/Python-3.12-blue?logo=python&logoColor=white)
+![faster-whisper](https://img.shields.io/badge/faster--whisper-CTranslate2-brightgreen)
+![yt-dlp](https://img.shields.io/badge/yt--dlp-latest-red)
+![Telegram Bot](https://img.shields.io/badge/Telegram-Bot-26A5E4?logo=telegram&logoColor=white)
+![License](https://img.shields.io/badge/License-MIT-yellow)
+
+Send a video link to Telegram. Get a structured markdown note in your wiki. No browser tabs, no manual transcription, no copy-paste.
 
 ## Background
 
@@ -107,3 +113,11 @@ python capture.py "https://youtube.com/watch?v=..."
 
 **Nour Halawa** — AI/ML engineer, Cairo.
 [github.com/nourhalawa](https://github.com/nourhalawa)
+
+## License
+
+MIT — see [LICENSE](LICENSE).
+
+---
+
+`python` · `whisper` · `yt-dlp` · `telegram-bot` · `knowledge-management` · `transcription` · `personal-wiki` · `ai-pipeline`
