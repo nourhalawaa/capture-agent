@@ -12,7 +12,9 @@ def _has_real_words(text: str) -> bool:
     return False
 
 
-def format_note(meta: dict, transcription: dict) -> str:
+def format_note(meta: dict, transcription: dict | None = None) -> str:
+    is_document = meta.get("platform") == "document"
+
     raw_title = meta.get("title") or ""
     if _has_real_words(raw_title):
         title = raw_title
@@ -21,36 +23,44 @@ def format_note(meta: dict, transcription: dict) -> str:
         platform = meta.get("platform") or "unknown"
         title = f"{platform} video by {creator}" if creator else f"{platform} video"
 
-    m, s = divmod(int(meta.get("duration") or 0), 60)
-    duration = f"{m}:{s:02d}"
-
     meta_lines = [
         f"- **Source:** {meta.get('url', '')}",
         f"- **Platform:** {meta.get('platform', '')}",
     ]
     if meta.get("creator"):
         meta_lines.append(f"- **Creator:** {meta['creator']}")
+    if not is_document:
+        m, s = divmod(int(meta.get("duration") or 0), 60)
+        meta_lines.append(f"- **Duration:** {m}:{s:02d}")
     meta_lines += [
-        f"- **Duration:** {duration}",
         f"- **Captured:** {date.today().isoformat()}",
         "- **Status:** unprocessed",
     ]
-
-    caption = meta.get("caption") or "_No caption._"
-    transcript = transcription.get("transcript", "")
 
     parts = [
         f"# {title}",
         "",
         *meta_lines,
         "",
-        "## Transcript",
-        "",
-        transcript,
-        "",
-        "## Caption",
-        "",
-        caption,
     ]
+
+    if is_document:
+        parts += [
+            "## Content",
+            "",
+            meta.get("content", ""),
+        ]
+    else:
+        caption = meta.get("caption") or "_No caption._"
+        transcript = (transcription or {}).get("transcript", "")
+        parts += [
+            "## Transcript",
+            "",
+            transcript,
+            "",
+            "## Caption",
+            "",
+            caption,
+        ]
 
     return "\n".join(parts) + "\n"
