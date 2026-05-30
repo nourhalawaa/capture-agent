@@ -18,7 +18,9 @@ def transcribe(video_path: str) -> dict:
         compute_type=config.WHISPER_COMPUTE,
     )
 
-    segments_gen, info = model.transcribe(video_path, beam_size=5)
+    segments_gen, info = model.transcribe(
+        video_path, beam_size=5, language=config.WHISPER_LANGUAGE
+    )
 
     # Materialize the generator while the model is alive — consuming it later
     # after del model causes a CTranslate2 fault.

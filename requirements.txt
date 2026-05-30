@@ -2,3 +2,6 @@ yt-dlp
 faster-whisper
 python-dotenv
 python-telegram-bot
+opencv-python
+pytesseract
+markitdown[all]
