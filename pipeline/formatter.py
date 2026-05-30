@@ -64,3 +64,34 @@ def format_note(meta: dict, transcription: dict | None = None) -> str:
         ]
 
     return "\n".join(parts) + "\n"
+
+
+def format_carousel_note(meta: dict, slides: list[dict]) -> str:
+    raw_title = meta.get("title") or ""
+    if _has_real_words(raw_title):
+        title = raw_title
+    else:
+        creator = meta.get("creator") or ""
+        platform = meta.get("platform") or "unknown"
+        title = f"{platform} post by {creator}" if creator else f"{platform} post"
+
+    meta_lines = [
+        f"- **Source:** {meta.get('url', '')}",
+        f"- **Platform:** {meta.get('platform', '')}",
+    ]
+    if meta.get("creator"):
+        meta_lines.append(f"- **Creator:** {meta['creator']}")
+    meta_lines += [
+        f"- **Slides:** {meta.get('slide_count', len(slides))}",
+        f"- **Captured:** {date.today().isoformat()}",
+        "- **Status:** unprocessed",
+    ]
+
+    caption = meta.get("caption") or "_No caption._"
+
+    parts = [f"# {title}", "", *meta_lines, "", "## Caption", "", caption, "", "## Slides", ""]
+    for s in slides:
+        text = (s.get("text") or "").strip()
+        parts += [f"### Slide {s['slide']}", "", text or "_No text on this slide._", ""]
+
+    return "\n".join(parts).rstrip() + "\n"
