@@ -9,7 +9,7 @@ from pathlib import Path
 import config
 from pipeline.downloader import download, download_images, is_video_post, _detect_platform
 from pipeline.transcriber import transcribe
-from pipeline.formatter import format_note, format_carousel_note
+from pipeline.formatter import format_note, format_carousel_note, format_photo_note
 from pipeline.document import parse_document
 from pipeline.ocr import ocr_images
 
@@ -29,7 +29,9 @@ class CaptureError(Exception):
 def _slugify(text: str, max_len: int = 80) -> str:
     if not text:
         return ""
-    illegal = set('<>:"/\\|?*')
+    # Filesystem-illegal chars, plus Obsidian wikilink-special chars ([[name#heading|alias^block]])
+    # that are filesystem-legal but break `[[name]]` parsing if left in a filename.
+    illegal = set('<>:"/\\|?*#^[]')
     cleaned = "".join(c for c in text if c not in illegal and ord(c) >= 0x20)
     cleaned = "-".join(cleaned.split())
     cleaned = cleaned.lower()
@@ -152,6 +154,23 @@ def _capture_document(url: str) -> str:
     except Exception as e:
         print(f"[capture] write stage failed: {e}", file=sys.stderr)
         raise CaptureError("write", e) from e
+
+
+def capture_photo(image_path: str, caption: str = "") -> str:
+    """OCR a photo already saved in raw/assets/ and write a raw note embedding it.
+
+    Returns the raw note's path. Raises on failure so the caller can fall back to
+    keeping just the saved image (the file is never lost either way).
+    """
+    img = Path(image_path)
+    slides = ocr_images([str(img)])
+    ocr_text = slides[0]["text"] if slides else ""
+    markdown = format_photo_note(img.name, ocr_text, caption)
+    raw_dir = Path(config.RAW_FOLDER)
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    note_path = raw_dir / f"{img.stem}.md"  # image stem already starts with "photo-"
+    note_path.write_text(markdown, encoding="utf-8")
+    return str(note_path)
 
 
 def capture(url: str) -> str:

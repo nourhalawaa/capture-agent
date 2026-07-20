@@ -20,11 +20,13 @@ Capture Agent solves the friction problem of getting content into that wiki. Vid
 Zero-friction media capture pipeline. Send any link to a Telegram bot — it figures out what it is and routes it automatically:
 
 - **YouTube / TikTok** — downloads the video, transcribes audio with Whisper, formats a note with title, creator, duration, transcript, and caption
-- **Instagram / Facebook reels** — same video pipeline, authenticated via burner-account browser cookies
-- **Instagram / Facebook carousels / image posts** — downloads all slides with gallery-dl, OCRs each slide with Tesseract (Arabic + English), formats a per-slide note with caption
+- **Instagram / Facebook reels** — same video pipeline; tries anonymously first, falls back to burner-account cookies only when needed
+- **Instagram / Facebook carousels / image posts** — downloads all slides with gallery-dl (anonymous-first), OCRs each slide with Tesseract (Arabic + English), formats a per-slide note with caption
 - **Articles, PDFs, web pages** — converts to markdown via MarkItDown, formats a document note
+- **Plain text** — any message without a link becomes a timestamped THOUGHT in the inbox
+- **Photos / documents** — saved to `raw/assets/`; photos are additionally OCR'd (ara+eng) into a note, documents/PDFs saved as-is
 
-One URL in. One `.md` file out. The bot processes links sequentially and edits the status message in-place: ⏳ Queued → ⏳ Processing → ✅ Done / ❌ Failed.
+One URL in. One `.md` file out. The bot processes links sequentially and edits the status message in-place: ⏳ Queued → ⏳ Processing → ✅ Done / ❌ Failed. **A failed capture is never dropped** — the link is appended to `system/skipped.md` for manual review.
 
 ## How it works
 
@@ -82,7 +84,7 @@ Telegram message
 
 ```powershell
 # 1. Clone and create venv
-git clone https://github.com/nourhalawa/capture-agent.git
+git clone https://github.com/nourhalawaa/capture-agent.git
 cd capture-agent
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
@@ -118,6 +120,14 @@ GALLERY_DL_COOKIES=C:\path\to\Firefox\Profiles\xxxxxxxx.Profile 1
 ```powershell
 # 6. Run
 python bot.py
+```
+
+### Run 24/7 on a Linux server (Docker)
+
+For always-on capture, deploy to a home server with Docker Compose — the bot writes into a Syncthing-synced copy of the vault so captures reach every device. Full runbook in **[DEPLOY.md](DEPLOY.md)**; the short version:
+
+```bash
+docker compose up -d --build
 ```
 
 ## Usage
@@ -185,6 +195,15 @@ python capture.py "https://..."
 - [x] Automatic routing — one `capture(url)` call handles all types
 - [x] Telegram bot with queuing and in-place status updates
 - [x] Configurable Whisper language (auto-detect or forced ISO code)
+- [x] Thoughts (plain text) and photo attachments (saved + OCR'd)
+- [x] Failed captures saved to `skipped.md` — never dropped
+- [x] Anonymous-first for IG/FB (cookies only as fallback)
+- [x] 24/7 Docker deployment for a Linux home server ([DEPLOY.md](DEPLOY.md))
+
+### Known limitations
+
+- Instagram `/p/` posts and some Facebook `/share/` posts can still fail to download (upstream gallery-dl extractor issues) — these are saved to `skipped.md` for manual capture rather than lost.
+- Documents/PDFs sent as attachments are saved but not parsed (send them as a link to extract text).
 
 ## Author
 

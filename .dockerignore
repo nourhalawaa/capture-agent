@@ -1,0 +1,13 @@
+.venv/
+temp/
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+.git/
+.env
+secrets/
+data/
+*.png
+*.jpg
+*.mp4

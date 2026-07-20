@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -34,7 +35,11 @@ def _detect_platform(url: str) -> str:
 
 
 def _apply_ig_cookies(opts: dict, url: str) -> None:
-    if _detect_platform(url) in ("instagram", "facebook") and config.GALLERY_DL_COOKIES:
+    if _detect_platform(url) not in ("instagram", "facebook"):
+        return
+    if config.GALLERY_DL_COOKIES_FILE:
+        opts["cookiefile"] = config.GALLERY_DL_COOKIES_FILE
+    elif config.GALLERY_DL_COOKIES:
         opts["cookiesfrombrowser"] = ("firefox", config.GALLERY_DL_COOKIES, None, None)
 
 
@@ -42,14 +47,19 @@ def is_video_post(url: str) -> bool:
     """instagram/facebook only: True = video/reel, False = image/carousel."""
     if _REEL_RE.search(url):
         return True
-    opts = {"quiet": True, "skip_download": True, "no_warnings": True}
-    _apply_ig_cookies(opts, url)
+    base_opts = {"quiet": True, "skip_download": True, "no_warnings": True}
     try:
-        with YoutubeDL(opts) as ydl:
+        with YoutubeDL(base_opts) as ydl:
             info = ydl.extract_info(url, download=False)
-    except Exception as e:
-        print(f"[is_video_post] probe failed, treating as image: {e}", file=sys.stderr)
-        return False
+    except Exception:
+        opts = dict(base_opts)
+        _apply_ig_cookies(opts, url)
+        try:
+            with YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+        except Exception as e:
+            print(f"[is_video_post] probe failed, treating as image: {e}", file=sys.stderr)
+            return False
     if not info:
         return False
     if info.get("_type") == "playlist":
@@ -60,7 +70,7 @@ def is_video_post(url: str) -> bool:
 def download(url: str) -> dict:
     TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
-    ydl_opts = {
+    base_opts = {
         "format": "bv*[height<=720][ext=mp4]+ba[ext=m4a]/b[height<=720][ext=mp4]/b[height<=720]/b",
         "merge_output_format": "mp4",
         "outtmpl": str(TEMP_DIR / "%(id)s.%(ext)s"),
@@ -68,10 +78,24 @@ def download(url: str) -> dict:
         "quiet": False,
         "no_warnings": False,
     }
-    _apply_ig_cookies(ydl_opts, url)
 
-    with YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
+    # Instagram/Facebook: try anonymously first. yt-dlp's cookie-authenticated
+    # code path has been unreliable against Instagram's current API (404s on
+    # public posts that succeed with no cookies at all) — cookies are the
+    # fallback for content anonymous access can't reach, not the default.
+    if _detect_platform(url) in ("instagram", "facebook"):
+        try:
+            with YoutubeDL(base_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+        except Exception as e:
+            print(f"[download] anonymous attempt failed ({e}); retrying with cookies", file=sys.stderr)
+            ydl_opts = dict(base_opts)
+            _apply_ig_cookies(ydl_opts, url)
+            with YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+    else:
+        with YoutubeDL(base_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
 
     video_path = ""
     if info.get("requested_downloads"):
@@ -90,15 +114,21 @@ def download(url: str) -> dict:
     }
 
 
-def download_images(url: str) -> dict:
-    run_dir = TEMP_DIR / f"carousel_{uuid4().hex[:8]}"
-    run_dir.mkdir(parents=True, exist_ok=True)
+def _cookie_args() -> list[str]:
+    if config.GALLERY_DL_COOKIES_FILE:
+        return ["--cookies", config.GALLERY_DL_COOKIES_FILE]
+    if config.GALLERY_DL_COOKIES:
+        return ["--cookies-from-browser", f"firefox:{config.GALLERY_DL_COOKIES}"]
+    return []
 
+
+def _gallery_dl_into(run_dir: Path, url: str, cookie_args: list[str]) -> list[tuple]:
+    """Run gallery-dl into run_dir and collect (num, image_path, metadata) items."""
     cmd = [
         sys.executable, "-m", "gallery_dl",
         "-D", str(run_dir),
         "--write-metadata",
-        "--cookies-from-browser", f"firefox:{config.GALLERY_DL_COOKIES}",
+        *cookie_args,
         url,
     ]
     proc = subprocess.run(cmd, capture_output=True, text=True,
@@ -106,7 +136,6 @@ def download_images(url: str) -> dict:
     if proc.returncode != 0:
         print(f"[download_images] gallery-dl exit {proc.returncode}: {proc.stderr.strip()}",
               file=sys.stderr)
-
     items = []
     for jf in run_dir.glob("*.json"):
         with open(jf, encoding="utf-8") as f:
@@ -114,6 +143,29 @@ def download_images(url: str) -> dict:
         img = jf.with_suffix("")
         if img.exists():
             items.append((data.get("num", 0), str(img.resolve()), data))
+    return items
+
+
+def download_images(url: str) -> dict:
+    TEMP_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Anonymous first, cookies only as fallback — mirrors the video path. Sending
+    # cookies on every request is what got the burner account flagged as bot
+    # activity, so we avoid them unless anonymous access genuinely can't reach
+    # the post (private/login-walled content).
+    run_dir = TEMP_DIR / f"carousel_{uuid4().hex[:8]}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    items = _gallery_dl_into(run_dir, url, [])
+
+    if not items:
+        cookie_args = _cookie_args()
+        if cookie_args:
+            print("[download_images] anonymous attempt got no images; retrying with cookies",
+                  file=sys.stderr)
+            shutil.rmtree(run_dir, ignore_errors=True)  # discard the empty anonymous attempt
+            run_dir = TEMP_DIR / f"carousel_{uuid4().hex[:8]}"
+            run_dir.mkdir(parents=True, exist_ok=True)
+            items = _gallery_dl_into(run_dir, url, cookie_args)
 
     if not items:
         raise RuntimeError(f"gallery-dl downloaded no images for {url}")

@@ -66,6 +66,41 @@ def format_note(meta: dict, transcription: dict | None = None) -> str:
     return "\n".join(parts) + "\n"
 
 
+def format_photo_note(image_name: str, ocr_text: str, caption: str = "") -> str:
+    """Note for a photo sent straight to the bot: embeds the image + its OCR text.
+
+    Unlike documents (saved as-is), photos are cheap to OCR, so their text is
+    captured here and becomes sortable/searchable like a transcript.
+    """
+    ocr_text = (ocr_text or "").strip()
+    # Title: prefer Nour's caption, else the first OCR line with real words
+    # (skips decorative/noise lines), else a generic label.
+    title = "Photo"
+    cap_first = next((ln.strip() for ln in caption.splitlines() if ln.strip()), "")
+    if cap_first:
+        title = cap_first[:80]
+    else:
+        for line in ocr_text.splitlines():
+            if line.strip() and _has_real_words(line):
+                title = line.strip()[:80]
+                break
+
+    parts = [
+        f"# {title}",
+        "",
+        "- **Source:** Telegram photo",
+        f"- **Captured:** {date.today().isoformat()}",
+        "- **Status:** unprocessed",
+        "",
+        f"![[assets/{image_name}]]",
+        "",
+    ]
+    if caption.strip():
+        parts += ["## Caption", "", caption.strip(), ""]
+    parts += ["## Text (OCR)", "", ocr_text or "_No text detected._"]
+    return "\n".join(parts) + "\n"
+
+
 def format_carousel_note(meta: dict, slides: list[dict]) -> str:
     raw_title = meta.get("title") or ""
     if _has_real_words(raw_title):

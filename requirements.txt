@@ -2,7 +2,7 @@ yt-dlp
 faster-whisper
 python-dotenv
 python-telegram-bot
-opencv-python
+opencv-python-headless
 pytesseract
 markitdown[all]
 gallery-dl

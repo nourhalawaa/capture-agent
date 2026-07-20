@@ -1,0 +1,23 @@
+services:
+  capture-bot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    # Run as Nour's host uid:gid so files written into the synced vault are owned
+    # by him (clean for Syncthing + Obsidian), not root. Defaults to 1000:1000;
+    # override with PUID/PGID in .env if `id -u` / `id -g` on the server differ.
+    user: "${PUID:-1000}:${PGID:-1000}"
+    environment:
+      # All four write surfaces (raw notes, inbox queue, skipped log, wiki log)
+      # resolve under /vault, which is bind-mounted to the real synced Hub below.
+      RAW_FOLDER: /vault/raw
+      INBOX_FILE: /vault/system/inbox.md
+      GALLERY_DL_COOKIES_FILE: /secrets/cookies.txt
+      HF_HOME: /data/hf-cache          # kept OUT of the vault — don't sync the ~0.5GB model
+    volumes:
+      # The server's Syncthing copy of The Hub. Set VAULT_PATH in .env to its real
+      # path (e.g. /home/nour/TheHub). Everything the bot writes lands in here and
+      # syncs back to the laptop + phone. THIS is what makes captures reach the vault.
+      - ${VAULT_PATH:-/home/nour/TheHub}:/vault
+      - ./data/hf-cache:/data/hf-cache
+      - ./secrets/cookies.txt:/secrets/cookies.txt:ro
