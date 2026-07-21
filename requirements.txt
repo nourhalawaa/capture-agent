@@ -6,3 +6,4 @@ opencv-python-headless
 pytesseract
 markitdown[all]
 gallery-dl
+tzdata

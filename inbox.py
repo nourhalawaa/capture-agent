@@ -15,12 +15,19 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import config
 
+_TZ = ZoneInfo(config.TIMEZONE)
+
+
+def now() -> datetime:
+    return datetime.now(_TZ)
+
 
 def _timestamp() -> str:
-    return datetime.now().strftime("%Y-%m-%d %H:%M")
+    return now().strftime("%Y-%m-%d %H:%M")
 
 
 def _one_line(text: str) -> str:
@@ -32,7 +39,7 @@ def _append(line: str) -> None:
     inbox_path = Path(config.INBOX_FILE)
     inbox_path.parent.mkdir(parents=True, exist_ok=True)
     existing = inbox_path.read_text(encoding="utf-8") if inbox_path.exists() else ""
-    heading = f"## {datetime.now().strftime('%Y-%m-%d')}"
+    heading = f"## {now().strftime('%Y-%m-%d')}"
     has_heading = any(ln.strip() == heading for ln in existing.splitlines())
     with inbox_path.open("a", encoding="utf-8", newline="\n") as f:
         if existing and not existing.endswith("\n"):

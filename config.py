@@ -7,6 +7,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# All inbox/log timestamps use this zone explicitly, independent of the host's
+# system clock/TZ setting (the server runs UTC; Nour is in Cairo, EET, no DST).
+TIMEZONE = os.getenv("TIMEZONE", "Africa/Cairo")
+
 WHISPER_MODEL = "small"
 WHISPER_DEVICE = "cpu"
 WHISPER_COMPUTE = "int8"

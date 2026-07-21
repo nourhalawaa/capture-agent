@@ -4,7 +4,6 @@ import asyncio
 import os
 import re
 import sys
-from datetime import datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -141,7 +140,7 @@ async def handle_attachment(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             tg_file = await msg.photo[-1].get_file()  # largest rendition
             suffix = Path(tg_file.file_path or "").suffix.lower() or ".jpg"
             filename = (
-                f"photo-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{tg_file.file_unique_id}{suffix}"
+                f"photo-{inbox.now().strftime('%Y%m%d-%H%M%S')}-{tg_file.file_unique_id}{suffix}"
             )
         elif msg.document:
             tg_file = await msg.document.get_file()
