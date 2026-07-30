@@ -115,6 +115,12 @@ run it again. Only one instance may poll a bot token — running both gives Tele
 - **Stop / start:** `docker compose down` / `docker compose up -d`.
 - **Model/cookies/temp** live outside the vault (`data/hf-cache`, `secrets/`, in-container
   `temp/`), so they never sync to your phone.
+- **Cookies stay mounted read-only.** yt-dlp rewrites the jar after each request, so
+  `config._writable_cookie_copy()` copies it to a writable temp path at container start
+  and hands yt-dlp the copy. Before that fix, every cookie-fallback capture died with
+  `[Errno 30] Read-only file system: '/secrets/cookies.txt'` (cost 3 Instagram reels,
+  2026-07-23 → 07-26). Because the copy is taken at start, **replacing cookies.txt still
+  needs `docker compose up -d --force-recreate`** to take effect.
 - **Known gaps (deferred):** Instagram `/p/` and Facebook `/share/` posts still fail
   capture (two open gallery-dl bugs) and accumulate in `system/skipped.md`. Keep the
   120–180s Instagram spacing if you ever run a bulk `batch_ingest.py` (a real IG soft-block
