@@ -96,6 +96,11 @@ run it again. Only one instance may poll a bot token — running both gives Tele
      and a `… VIDEO [[…]] · [source](…) · #unsorted` line in `system/inbox.md`;
    - a **plain thought** → a `… THOUGHT: "…" · #unsorted` line;
    - a **photo** → a file in `raw/assets/` + a `… FILE [[…]] · #unsorted` line.
+   - `/do buy sunglasses` → a `… "buy sunglasses" · #uncommitted` line in
+     `execution/inbox.md`, and `execution/NOW.md` re-rendered;
+   - `/now` → the open list replies in the chat;
+   - `/done 1` → the action leaves `execution/actions.md` and appears in
+     `execution/done.md` (needs a commitment + an action written by hand first).
 4. Confirm those files **sync to the laptop/phone** via Syncthing, and that they're
    **owned by you, not root** (`ls -l ~/TheHub/raw | tail`). This is the real proof the
    mount + PUID/PGID are correct.
@@ -116,3 +121,12 @@ run it again. Only one instance may poll a bot token — running both gives Tele
   happened once) — the live bot is human-paced so it's not at risk.
 - **Avoid** firing a bulk `batch_ingest.py` at the exact time Claude is mid-sort on the
   laptop: both write `inbox.md`, and a collision makes a recoverable `.sync-conflict` file.
+- **Same hazard on `execution/actions.md`**, which has two writers: this bot (`/done`)
+  and Nour hand-editing on laptop/phone. Don't hand-edit it at the moment you fire
+  `/done`. Mitigated, not eliminated: `/done` deletes exactly one matched line and
+  replaces the file atomically, and `execution/done.md` is append-only — so the closed
+  text survives even if a sync conflict eats the `actions.md` edit, and recovery is
+  always possible.
+- **`execution/NOW.md` is generated** — never hand-edit it; the next `/do`, `/done`, or
+  `/now` overwrites it wholesale. Hand-edits to `commitments.md`/`actions.md` on the
+  laptop show up in NOW on the next `/now`. There is no scheduler by design.

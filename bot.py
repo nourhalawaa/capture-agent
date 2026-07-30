@@ -11,6 +11,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 import config
+import execution
 import inbox
 from capture import CaptureError, capture, capture_photo
 
@@ -30,6 +31,14 @@ except ValueError:
 URL_RE = re.compile(r"https?://\S+")
 
 capture_lock = asyncio.Lock()
+
+# Deliberately NOT capture_lock: a /done must not queue behind a 3-minute
+# transcription. Execution mutations are fast file edits and serialize among
+# themselves only.
+execution_lock = asyncio.Lock()
+
+# Telegram rejects messages over 4096 chars.
+TELEGRAM_LIMIT = 3900
 
 
 def _authorized(update: Update) -> bool:
@@ -64,7 +73,85 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "👋 Send me a video link and I'll transcribe it into raw/. "
         "Plain text becomes a THOUGHT in the inbox; photos and documents are saved to raw/."
+        "\n\nExecution: /do <text> to log something to do, /now to see what's open, "
+        "/done <n|text> to close it."
     )
+
+
+def _command_text(message) -> str:
+    """The text after the command token, with internal spacing preserved.
+
+    Not `context.args` — that splits on whitespace and rejoining it would silently
+    reflow what Nour typed. /do is a verbatim capture, so it has to stay verbatim.
+    Splitting on the first whitespace of any kind also handles `/do@botname` and a
+    command followed by a newline.
+    """
+    parts = re.split(r"\s", message.text or "", maxsplit=1)
+    return parts[1].strip() if len(parts) > 1 else ""
+
+
+async def do(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/do <text> — plain capture into the execution inbox.
+
+    No prompts, no follow-up questions, no field entry. If it ever asks Nour to
+    classify something at capture time, it's wrong.
+    """
+    if not _authorized(update):
+        return
+    text = _command_text(update.message)
+    if not text:
+        await update.message.reply_text("Send it as: /do <what you want to do>")
+        return
+
+    async with execution_lock:
+        try:
+            execution.log_todo(text)
+        except Exception as e:
+            await update.message.reply_text(f"❌ Couldn't save that — please resend.\n{e}")
+            return
+        # The capture is safe on disk now; a failed re-render is cosmetic and the
+        # next /now fixes it, so it must not report the capture as lost.
+        try:
+            execution.render_now()
+        except Exception as e:
+            await update.message.reply_text(f"✅ Logged (NOW not re-rendered: {e})")
+            return
+    await update.message.reply_text("✅ Logged.")
+
+
+async def done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/done <n|text> — close an action by its NOW number or by text match."""
+    if not _authorized(update):
+        return
+    selector = _command_text(update.message)
+    if not selector:
+        await update.message.reply_text("Send it as: /done 3 — or /done <some of the text>")
+        return
+
+    async with execution_lock:
+        try:
+            result = execution.close_action(selector)
+        except Exception as e:
+            await update.message.reply_text(f"❌ Couldn't close that.\n{e}")
+            return
+    await update.message.reply_text(result.message)
+
+
+async def now(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/now — re-render and reply with the list, so it works without Obsidian."""
+    if not _authorized(update):
+        return
+    async with execution_lock:
+        try:
+            body = execution.render_now()
+        except Exception as e:
+            await update.message.reply_text(f"❌ Couldn't render NOW.\n{e}")
+            return
+
+    text = execution.for_telegram(body) or "Nothing in NOW yet."
+    if len(text) > TELEGRAM_LIMIT:
+        text = text[:TELEGRAM_LIMIT] + "\n…truncated — open execution/NOW.md for the rest."
+    await update.message.reply_text(text)
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -183,6 +270,12 @@ async def handle_attachment(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 def main() -> None:
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
+    # Execution district. handle_message below is registered with ~filters.COMMAND,
+    # so these can never intercept a link or a plain thought — capture behaviour is
+    # unchanged by construction.
+    app.add_handler(CommandHandler("do", do))
+    app.add_handler(CommandHandler("done", done))
+    app.add_handler(CommandHandler("now", now))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.PHOTO | filters.Document.ALL, handle_attachment))
     print("Bot starting (polling)…")
