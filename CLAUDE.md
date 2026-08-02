@@ -25,14 +25,7 @@ The production target is a headless Linux server via Docker Compose — see **`D
 python capture.py "<url>"
 
 # Start the Telegram bot (blocking, Ctrl+C to stop)
-# WARNING: only one process may poll the token. The server is live — don't run this.
 python bot.py
-
-# Execution district, without starting a poller (this is how to test /do /done /now)
-python execution.py render
-python execution.py add "buy sunglasses"
-python execution.py done 3
-python execution.py done "landing page"
 
 # Test individual stages standalone
 python pipeline\downloader.py "<video_url>"
@@ -86,15 +79,7 @@ URL
 
 ## Key conventions
 
-**`config.py`** — single source of truth for all constants. Calls `load_dotenv()` at import time. Keys: `WHISPER_MODEL`, `WHISPER_DEVICE`, `WHISPER_COMPUTE`, `WHISPER_LANGUAGE`, `RAW_FOLDER`, `INBOX_FILE`, `SKIPPED_FILE`, `EXECUTION_FOLDER` + the five per-file execution keys (`COMMITMENTS_FILE`, `ACTIONS_FILE`, `EXEC_INBOX_FILE`, `DONE_FILE`, `NOW_FILE` — `DONE_FILE` is separate specifically so the temporary done-log can be relocated in one line), `GALLERY_DL_COOKIES`, `GALLERY_DL_COOKIES_FILE` (preferred on Linux/Docker), `TESSERACT_CMD`. Never hardcode paths or credentials.
-
-**`execution.py`** — the hub's **execution district** (`execution/`), a separate pipeline from capture: capture optimises for never losing anything, execution optimises for *actively forgetting*. Backs the `/do`, `/done`, `/now` bot commands. Reads `commitments.md` (Nour-only, never written here) and `actions.md` (his; the ONLY mutation allowed is deleting one closed line — never a rewrite or an annotation); writes `inbox.md` (`/do` appends), `done.md` (append-only, **temporary home** — `DONE_FILE` moves when the planned tracking system lands), and `NOW.md` (fully generated, overwritten wholesale). Reuses `inbox.py`'s `now()` and `_one_line()` so timestamps and verbatim handling match the capture queue. Key points:
-- `_content_lines()` strips HTML-comment regions **while preserving line indices** — the seed files carry worked examples inside `<!-- -->`, and parsing those would invent commitments Nour never wrote. Indices must survive because `close_action` deletes by line number.
-- `ordered_open_actions()` is the single source of the `/done N` numbering: commitments-file order × actions-file order, recomputed every call, so there's no index state file to drift. Only actions under `active` commitments are numbered (that's exactly what NOW shows); paused and unassigned ones are closable by text instead.
-- `close_action(int | str)` — ambiguous or unmatched text **mutates nothing** and reports candidates; guessing which of Nour's lines to delete is worse than doing nothing. Writes `actions.md` via `_write_atomic()` (temp + `os.replace`).
-- `render_now()` — NOW shows open actions under active commitments **and nothing else**; everything hidden (paused, unassigned, unknown slug) is accounted for in OVERVIEW, so nothing silently vanishes. "Untouched" is derived from `done.md` dates, the district's only timestamped surface — a reported fact, never a decay term in a score. There is no scoring, ranking, or automatic classification anywhere in this module, by design.
-- `for_telegram()` — drops the OVERVIEW table and emphasis markers. Replies are sent as **plain text**: MarkdownV2 needs every special char escaped and a parse failure means the message doesn't send at all.
-- `__main__` CLI (`render` / `add` / `done` / `show`) is how this gets tested locally — **never run `python bot.py` on the laptop while the server is live** (one poller per token, else Telegram 409). The CLI reconfigures stdout to UTF-8 because Windows' legacy codepage can't encode `·`/`—`/`✅` and would crash *after* a successful mutation.
+**`config.py`** — single source of truth for all constants. Calls `load_dotenv()` at import time. Keys: `WHISPER_MODEL`, `WHISPER_DEVICE`, `WHISPER_COMPUTE`, `WHISPER_LANGUAGE`, `RAW_FOLDER`, `INBOX_FILE`, `SKIPPED_FILE`, `GALLERY_DL_COOKIES`, `GALLERY_DL_COOKIES_FILE` (preferred on Linux/Docker), `TESSERACT_CMD`. Never hardcode paths or credentials.
 
 **`inbox.py`** — append-only writer for the hub's `system/inbox.md` queue. `log_video(note_stem, url, context)`, `log_file(file_name, context)`, `log_thought(text)`, and `log_failed(url, context, stage, error)` (appends to `system/skipped.md`, same format `batch_ingest.py` uses, so live-bot and batch failures share one review list). Items append under a `## YYYY-MM-DD` date heading (created with the day's first capture). One line per item: `- [YYYY-MM-DD HH:MM] KIND [[wikilink]] · [source](url) · "context" · #unsorted` (THOUGHT has no wikilink/source; empty segments omitted; internal newlines collapse to ` ⏎ `). VIDEO wikilinks use the note stem without `.md`; FILE wikilinks keep the extension. Never edits or deletes existing lines — sorting later flips `#unsorted` → `#sorted`.
 
@@ -131,7 +116,6 @@ URL
 
 **`bot.py`**
 - Whitelist: every handler starts with `_authorized(update)` — only `TELEGRAM_ALLOWED_USER_ID` gets a response; everyone else is silently ignored. Bot refuses to start if the ID is unset.
-- **Execution commands** `/do`, `/done`, `/now` (see `execution.py`). They cannot intercept links or plain thoughts: `handle_message` is registered with `filters.TEXT & ~filters.COMMAND`, so capture behaviour is unchanged by construction. `_command_text()` reads the text after the command token from `update.message.text` — **not** `context.args`, which splits on whitespace and would silently reflow a verbatim `/do` capture. A separate `execution_lock` (not `capture_lock`) means a `/done` never queues behind a 3-minute transcription.
 - Text without a URL → `inbox.log_thought()` (verbatim THOUGHT line). Text with a URL → capture; on success `inbox.log_video()` with the non-URL remainder of the message as context. On any failure → `_save_failure()` → `inbox.log_failed()` (skipped.md) so the link is never lost; the thought and queue writes are also wrapped so a disk hiccup can't silently drop them.
 - Attachments are saved to `RAW_FOLDER/assets/` first (largest photo rendition; sanitized document filename; collision-suffixed with `file_unique_id`) — so the binary is never lost — then: **photos** are OCR'd via `capture_photo()` into a raw note (falls back to a plain FILE line if OCR fails); **documents/PDFs** get a plain `inbox.log_file()` line (parsing big/scanned PDFs is slow/failure-prone, left on-demand).
 - `capture_lock = asyncio.Lock()` enforces sequential processing.

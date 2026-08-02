@@ -28,23 +28,6 @@ Zero-friction media capture pipeline. Send any link to a Telegram bot — it fig
 
 One URL in. One `.md` file out. The bot processes links sequentially and edits the status message in-place: ⏳ Queued → ⏳ Processing → ✅ Done / ❌ Failed. **A failed capture is never dropped** — the link is appended to `system/skipped.md` for manual review.
 
-### Execution commands
-
-The same bot also drives the hub's `execution/` district — a separate pipeline, because
-capture optimises for never losing anything while execution optimises for *actively
-forgetting*. Three commands, no scoring and no ranking:
-
-| Command | What it does |
-|---|---|
-| `/do <text>` | logs it verbatim to `execution/inbox.md`. No prompts, no classification at capture time. |
-| `/now` | replies with the open list, grouped under your active commitments |
-| `/done <n\|text>` | closes it by NOW number or text match → `execution/done.md` |
-
-`commitments.md` (3–5 season-long things) and `actions.md` are hand-written; `NOW.md` is
-generated and overwritten on every command. There's no scheduler — the render is a side
-effect of each mutation. Local testing without a Telegram poller: `python execution.py
-render | add "<text>" | done <n|text>`.
-
 ## How it works
 
 ```

@@ -8,14 +8,10 @@ services:
     # override with PUID/PGID in .env if `id -u` / `id -g` on the server differ.
     user: "${PUID:-1000}:${PGID:-1000}"
     environment:
-      # Every write surface (raw notes, inbox queue, skipped log, wiki log, and the
-      # execution district) resolves under /vault, which is bind-mounted to the real
-      # synced Hub below.
+      # All four write surfaces (raw notes, inbox queue, skipped log, wiki log)
+      # resolve under /vault, which is bind-mounted to the real synced Hub below.
       RAW_FOLDER: /vault/raw
       INBOX_FILE: /vault/system/inbox.md
-      # Execution district (/do, /done, /now). Resolves under the same /vault
-      # bind-mount, so no extra volume is needed.
-      EXECUTION_FOLDER: /vault/execution
       GALLERY_DL_COOKIES_FILE: /secrets/cookies.txt
       HF_HOME: /data/hf-cache          # kept OUT of the vault — don't sync the ~0.5GB model
     volumes:
