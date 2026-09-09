@@ -52,7 +52,13 @@ def format_note(meta: dict, transcription: dict | None = None) -> str:
         ]
     else:
         caption = meta.get("caption") or "_No caption._"
-        transcript = (transcription or {}).get("transcript", "")
+        transcript = ((transcription or {}).get("transcript") or "").strip()
+        if not transcript:
+            # Say which kind of empty this is. A silent clip and a crashed
+            # transcriber both used to render as a blank section, so a lost
+            # transcript looked exactly like a video with no speech.
+            error = (transcription or {}).get("error", "")
+            transcript = f"_Transcription failed: {error}_" if error else "_No speech detected._"
         parts += [
             "## Transcript",
             "",
@@ -127,6 +133,14 @@ def format_carousel_note(meta: dict, slides: list[dict]) -> str:
     parts = [f"# {title}", "", *meta_lines, "", "## Caption", "", caption, "", "## Slides", ""]
     for s in slides:
         text = (s.get("text") or "").strip()
-        parts += [f"### Slide {s['slide']}", "", text or "_No text on this slide._", ""]
+        is_video = s.get("kind") == "video"
+        heading = f"### Slide {s['slide']}" + (" (video)" if is_video else "")
+        if text:
+            body = text
+        elif s.get("note"):
+            body = f"_{s['note']}_"
+        else:
+            body = "_No speech on this slide._" if is_video else "_No text on this slide._"
+        parts += [heading, "", body, ""]
 
     return "\n".join(parts).rstrip() + "\n"

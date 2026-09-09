@@ -116,9 +116,17 @@ run it again. Only one instance may poll a bot token — running both gives Tele
   `[Errno 30] Read-only file system: '/secrets/cookies.txt'` (cost 3 Instagram reels,
   2026-07-23 → 07-26). Because the copy is taken at start, **replacing cookies.txt still
   needs `docker compose up -d --force-recreate`** to take effect.
-- **Known gaps (deferred):** Instagram `/p/` and Facebook `/share/` posts still fail
-  capture (two open gallery-dl bugs) and accumulate in `system/skipped.md`. Keep the
-  120–180s Instagram spacing if you ever run a bulk `batch_ingest.py` (a real IG soft-block
-  happened once) — the live bot is human-paced so it's not at risk.
+- **Known gaps (deferred):** Facebook `/share/p/` and `/share/v/` links still fail — the
+  share URL returns `HTTP 400` to anything without a logged-in session, so gallery-dl never
+  reaches a post to download (re-confirmed 2026-09-10). TikTok `/photo/` posts have no
+  extractor. Both accumulate in `system/skipped.md`. **Instagram `/p/` posts are no longer
+  on this list** — they capture normally; the 2026-08 outage blamed on them was an
+  Instagram-side throttle that healed itself. Keep the 120–180s Instagram spacing if you
+  ever run a bulk `batch_ingest.py` (a real IG soft-block happened once) — the live bot is
+  human-paced so it's not at risk.
 - **Avoid** firing a bulk `batch_ingest.py` at the exact time Claude is mid-sort on the
   laptop: both write `inbox.md`, and a collision makes a recoverable `.sync-conflict` file.
+  This is not theoretical — it has happened **five** times and cost 304 inbox lines in
+  total, most recently on 2026-09-10 (12 lines, all recovered). The two most damaging
+  collisions were caused by Claude's own writes, not by Nour's captures, so "pause the bot
+  during a session" is not a sufficient mitigation.

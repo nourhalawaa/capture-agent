@@ -44,7 +44,14 @@ def _apply_ig_cookies(opts: dict, url: str) -> None:
 
 
 def is_video_post(url: str) -> bool:
-    """instagram/facebook only: True = video/reel, False = image/carousel."""
+    """instagram/facebook only: True = single video/reel, False = image/carousel.
+
+    A playlist result with more than one entry is a multi-slide carousel, and it
+    belongs on the gallery-dl path even when one of those slides is a video: the
+    video path can only carry a single file, and `noplaylist` makes yt-dlp
+    download none of them. That left a phantom `<id>.NA` filename which killed
+    the capture two stages later (`/p/Dchel6pEe2u`, 2026-09-04).
+    """
     if _REEL_RE.search(url):
         return True
     base_opts = {"quiet": True, "skip_download": True, "no_warnings": True}
@@ -63,8 +70,28 @@ def is_video_post(url: str) -> bool:
     if not info:
         return False
     if info.get("_type") == "playlist":
-        return len(list(info.get("entries") or [])) > 0
+        # Exactly one entry is a single video wrapped in a playlist — still the
+        # video path. Two or more slides is a carousel.
+        return len([e for e in (info.get("entries") or []) if e]) == 1
     return True
+
+
+def _resolve_download(info: dict) -> tuple[str, dict]:
+    """Return (path of the file yt-dlp actually wrote, the node describing it).
+
+    A playlist result carries no top-level `requested_downloads`, and
+    `prepare_filename()` on one invents `<id>.NA` — a path that never exists on
+    disk. Passing that on cost a capture on 2026-09-04, and reported it as a
+    misleading `transcription: No such file` error three stages downstream. So
+    look inside the entries as well, and never return a path that isn't there.
+    """
+    nodes = [info, *(e for e in (info.get("entries") or []) if e)]
+    for node in nodes:
+        for dl in node.get("requested_downloads") or []:
+            path = dl.get("filepath") or dl.get("_filename") or ""
+            if path and Path(path).exists():
+                return path, node
+    return "", info
 
 
 def download(url: str) -> dict:
@@ -97,18 +124,29 @@ def download(url: str) -> dict:
         with YoutubeDL(base_opts) as ydl:
             info = ydl.extract_info(url, download=True)
 
-    video_path = ""
-    if info.get("requested_downloads"):
-        video_path = info["requested_downloads"][0].get("filepath", "") or ""
+    video_path, media = _resolve_download(info)
     if not video_path:
-        video_path = ydl.prepare_filename(info)
+        raise RuntimeError(
+            f"yt-dlp reported success but wrote no video file for {url} "
+            f"(_type={info.get('_type')!r}, "
+            f"entries={len([e for e in (info.get('entries') or []) if e])})"
+        )
+
+    # Metadata lives on the entry for a playlist-wrapped video, on the top-level
+    # info dict otherwise. Fall back across both so neither shape loses a title.
+    def field(*names: str) -> str:
+        for source in (media, info):
+            for name in names:
+                if source.get(name):
+                    return source[name]
+        return ""
 
     return {
-        "video_path": str(Path(video_path).resolve()) if video_path else "",
-        "title": info.get("title") or "",
-        "creator": info.get("uploader") or info.get("channel") or info.get("creator") or "",
-        "duration": int(info.get("duration") or 0),
-        "caption": info.get("description") or "",
+        "video_path": str(Path(video_path).resolve()),
+        "title": field("title"),
+        "creator": field("uploader", "channel", "creator"),
+        "duration": int(media.get("duration") or info.get("duration") or 0),
+        "caption": field("description"),
         "url": url,
         "platform": _detect_platform(url),
     }

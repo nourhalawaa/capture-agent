@@ -58,6 +58,22 @@ def _save_failure(url: str, context: str, stage: str, error: str) -> str:
         return " — ⚠️ couldn't save it either, please resend"
 
 
+async def _tell(message, text: str, edit: bool = False) -> None:
+    """Best-effort Telegram write. Never raises.
+
+    Talking to Telegram is the one step that can fail *after* the capture is
+    safely on disk, and it must never be reported as a capture failure. Because
+    the reply used to sit inside the same `try` as the inbox append, three
+    successful captures were logged to skipped.md as `inbox:` failures on a
+    plain network blip (2026-08-12, 08-19, 09-04) — and Nour re-sent one of
+    them, which is how `grow.halal-DcGE-XJDDkn` ended up in the inbox twice.
+    """
+    try:
+        await (message.edit_text(text) if edit else message.reply_text(text))
+    except Exception as e:
+        print(f"[bot] couldn't reach Telegram to report status: {e}", file=sys.stderr)
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _authorized(update):
         return
@@ -78,9 +94,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             return
         try:
             inbox.log_thought(text)
-            await update.message.reply_text("🧠 Saved to inbox as a THOUGHT.")
         except Exception as e:
-            await update.message.reply_text(f"❌ Couldn't save that thought — please resend.\n{e}")
+            await _tell(update.message, f"❌ Couldn't save that thought — please resend.\n{e}")
+            return
+        await _tell(update.message, "🧠 Saved to inbox as a THOUGHT.")
         return
 
     url = match.group(0)
@@ -95,31 +112,38 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     async with capture_lock:
         if was_queued:
-            try:
-                await status.edit_text("⏳ Processing…")
-            except Exception:
-                pass
+            await _tell(status, "⏳ Processing…", edit=True)
 
+        # Each stage reports on its own, and only the stage that actually failed
+        # writes to skipped.md. Bundling them let a failed Telegram reply mark a
+        # finished capture as a failure — see _tell().
         try:
             loop = asyncio.get_running_loop()
             result_path = await loop.run_in_executor(None, capture, url)
-            filename = Path(result_path).name
-            try:
-                inbox.log_video(Path(result_path).stem, url, note_context)
-                await status.edit_text(f"✅ Done — saved to raw/{filename} and queued in inbox.")
-            except Exception as e:
-                # The note was written; only the inbox append failed. Record it so the
-                # capture isn't orphaned in raw/ with no queue entry.
-                _save_failure(url, note_context, "inbox", f"note saved as {filename} but queueing failed: {e}")
-                await status.edit_text(
-                    f"⚠️ Saved raw/{filename} but couldn't queue it — logged to skipped.md for review."
-                )
         except CaptureError as ce:
             saved = _save_failure(url, note_context, ce.stage, str(ce.original))
-            await status.edit_text(f"❌ Failed at {ce.stage}{saved}.\n{ce.original}")
+            await _tell(status, f"❌ Failed at {ce.stage}{saved}.\n{ce.original}", edit=True)
+            return
         except Exception as e:
             saved = _save_failure(url, note_context, "unknown", str(e))
-            await status.edit_text(f"❌ Failed (unknown stage){saved}.\n{e}")
+            await _tell(status, f"❌ Failed (unknown stage){saved}.\n{e}", edit=True)
+            return
+
+        filename = Path(result_path).name
+        try:
+            inbox.log_video(Path(result_path).stem, url, note_context)
+        except Exception as e:
+            # The note was written; only the inbox append failed. Record it so the
+            # capture isn't orphaned in raw/ with no queue entry.
+            _save_failure(url, note_context, "inbox", f"note saved as {filename} but queueing failed: {e}")
+            await _tell(
+                status,
+                f"⚠️ Saved raw/{filename} but couldn't queue it — logged to skipped.md for review.",
+                edit=True,
+            )
+            return
+
+        await _tell(status, f"✅ Done — saved to raw/{filename} and queued in inbox.", edit=True)
 
 
 async def handle_attachment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -157,27 +181,38 @@ async def handle_attachment(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await tg_file.download_to_drive(custom_path=dest)
     except Exception as e:
         saved = _save_failure("(attachment)", caption, "attachment", str(e))
-        await msg.reply_text(f"❌ Failed to save attachment{saved}.\n{e}")
+        await _tell(msg, f"❌ Failed to save attachment{saved}.\n{e}")
         return
 
     # The binary is now safely on disk. From here nothing can lose it — OCR is a
     # best-effort enrichment that falls back to a plain FILE line if it fails.
+    note_path = None
+    ocr_error = ""
     if is_photo:
         try:
             loop = asyncio.get_running_loop()
             note_path = await loop.run_in_executor(None, capture_photo, str(dest), caption)
-            inbox.log_file(Path(note_path).stem, caption)
-            await msg.reply_text(
-                f"🖼️ Saved raw/assets/{dest.name}, OCR'd to raw/{Path(note_path).name}, queued in inbox."
-            )
         except Exception as e:
-            inbox.log_file(dest.name, caption)
-            await msg.reply_text(
-                f"📎 Saved raw/assets/{dest.name} (OCR skipped: {e}) and queued in inbox."
-            )
+            ocr_error = str(e)
+
+    # Queue exactly once, whichever way OCR went. The append and the reply used
+    # to share a `try`, so a failed reply fell into the fallback branch and
+    # logged a *second* FILE line for the same image.
+    entry = Path(note_path).stem if note_path else dest.name
+    try:
+        inbox.log_file(entry, caption)
+    except Exception as e:
+        _save_failure("(attachment)", caption, "inbox",
+                      f"saved as assets/{dest.name} but queueing failed: {e}")
+        await _tell(msg, f"⚠️ Saved raw/assets/{dest.name} but couldn't queue it — logged to skipped.md.")
+        return
+
+    if note_path:
+        await _tell(msg, f"🖼️ Saved raw/assets/{dest.name}, OCR'd to raw/{Path(note_path).name}, queued in inbox.")
+    elif is_photo:
+        await _tell(msg, f"📎 Saved raw/assets/{dest.name} (OCR skipped: {ocr_error}) and queued in inbox.")
     else:
-        inbox.log_file(dest.name, caption)
-        await msg.reply_text(f"📎 Saved to raw/assets/{dest.name} and queued in inbox.")
+        await _tell(msg, f"📎 Saved to raw/assets/{dest.name} and queued in inbox.")
 
 
 def main() -> None:

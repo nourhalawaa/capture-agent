@@ -8,7 +8,7 @@ from pathlib import Path
 
 import config
 from pipeline.downloader import download, download_images, is_video_post, _detect_platform
-from pipeline.transcriber import transcribe
+from pipeline.transcriber import NoAudioError, transcribe
 from pipeline.formatter import format_note, format_carousel_note, format_photo_note
 from pipeline.document import parse_document
 from pipeline.ocr import ocr_images
@@ -17,6 +17,10 @@ _IG_POST_RE = re.compile(r"/(?:p|reel|reels|tv)/([^/?#]+)")
 
 SOCIAL_VIDEO_PLATFORMS = {"youtube", "tiktok"}
 SOCIAL_IMAGE_PLATFORMS = {"instagram", "facebook"}
+
+# Carousel slides that are videos, not images — gallery-dl returns both.
+VIDEO_SLIDE_SUFFIXES = {".mp4", ".mov", ".webm", ".mkv", ".m4v"}
+VIDEO_SLIDE_LIMIT = 5
 
 
 class CaptureError(Exception):
@@ -76,9 +80,17 @@ def _capture_video(url: str) -> str:
 
         try:
             transcription = transcribe(meta["video_path"])
+        except NoAudioError:
+            transcription = {"transcript": "", "language": "", "segments": [],
+                             "error": "this video has no audio track"}
         except Exception as e:
-            print(f"[capture] transcription stage failed: {e}", file=sys.stderr)
-            raise CaptureError("transcription", e) from e
+            # Non-fatal on purpose. A failed transcript must not throw away a
+            # download that worked — the note still carries title, creator,
+            # caption and URL, which is enough to sort from and to rewatch.
+            # Discarding the whole capture instead lost two items outright
+            # (2026-08-21 `tuple index out of range`, 2026-09-04 `.NA` path).
+            print(f"[capture] transcription stage failed (non-fatal): {e}", file=sys.stderr)
+            transcription = {"transcript": "", "language": "", "segments": [], "error": str(e)}
 
         try:
             markdown = format_note(meta, transcription)
@@ -100,6 +112,40 @@ def _capture_video(url: str) -> str:
                       file=sys.stderr)
 
 
+def _read_slides(paths: list[str]) -> list[dict]:
+    """Read every slide: OCR the images, transcribe the videos.
+
+    Instagram carousels mix the two freely and gallery-dl fetches both, but OCR
+    on an `.mp4` just fails — so an all-video carousel rendered as N empty
+    slides, losing the whole point of the post while the note looked complete.
+    Video slides beyond VIDEO_SLIDE_LIMIT are named but not transcribed, to keep
+    a long carousel from monopolising the 8GB server.
+    """
+    slides: list[dict] = []
+    transcribed = 0
+    for i, path in enumerate(paths, start=1):
+        is_video = Path(path).suffix.lower() in VIDEO_SLIDE_SUFFIXES
+        if not is_video:
+            slides.append({"slide": i, "kind": "image", "text": ocr_images([path])[0]["text"]})
+            continue
+        if transcribed >= VIDEO_SLIDE_LIMIT:
+            slides.append({"slide": i, "kind": "video", "text": "",
+                           "note": f"not transcribed — over the {VIDEO_SLIDE_LIMIT}-video limit"})
+            continue
+        try:
+            text = (transcribe(path).get("transcript") or "").strip()
+            transcribed += 1
+        except NoAudioError:
+            slides.append({"slide": i, "kind": "video", "text": "", "note": "no audio track"})
+            continue
+        except Exception as e:
+            print(f"[capture] slide {i} transcription failed (non-fatal): {e}", file=sys.stderr)
+            slides.append({"slide": i, "kind": "video", "text": "", "note": f"transcription failed: {e}"})
+            continue
+        slides.append({"slide": i, "kind": "video", "text": text})
+    return slides
+
+
 def _capture_carousel(url: str) -> str:
     image_dir: Path | None = None
     try:
@@ -111,9 +157,9 @@ def _capture_carousel(url: str) -> str:
         image_dir = Path(meta["image_paths"][0]).parent
 
         try:
-            slides = ocr_images(meta["image_paths"])
+            slides = _read_slides(meta["image_paths"])
         except Exception as e:
-            print(f"[capture] ocr stage failed (non-fatal): {e}", file=sys.stderr)
+            print(f"[capture] slide-reading stage failed (non-fatal): {e}", file=sys.stderr)
             slides = [{"slide": i + 1, "text": ""} for i in range(meta["slide_count"])]
 
         try:

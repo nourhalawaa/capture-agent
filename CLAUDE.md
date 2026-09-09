@@ -40,7 +40,7 @@ python -c "import yt_dlp, faster_whisper, dotenv, telegram, gallery_dl, markitdo
 
 ## Architecture
 
-`capture(url)` auto-routes by content type. All stages raise `CaptureError(stage, original)` on failure; OCR is non-fatal (degrades gracefully). The bot never drops a failed capture: `bot.py` catches the error and calls `inbox.log_failed()` to record the URL + stage + error in `system/skipped.md` for manual review.
+`capture(url)` auto-routes by content type. Stages raise `CaptureError(stage, original)` on failure; **OCR and transcription are non-fatal** and degrade gracefully — a note that says why its transcript is missing beats no note at all. The bot never drops a failed capture: `bot.py` catches the error and calls `inbox.log_failed()` to record the URL + stage + error in `system/skipped.md` for manual review.
 
 ```
 URL
@@ -51,14 +51,15 @@ URL
        ├─ instagram / facebook                    download(url)        yt-dlp + cookies for IG/FB
        │    │                                         │
        │    ├─ is_video_post()=True ──────────►  transcribe(path)     faster-whisper
-       │    │                                         │
+       │    │   (reel, or ≤1 playlist entry)        │                 non-fatal
        │    └─ is_video_post()=False ──────────► format_note()        Transcript + Caption
-       │         │                                    │
+       │        (≥2 entries = carousel)             │
        │    _capture_carousel()              wiki/raw/<slug>-<id>.md
        │         │
        │    download_images(url)   gallery-dl, Firefox cookies, temp/carousel_<id>/
        │         │
-       │    ocr_images(paths)      Tesseract ara+eng --psm 6, one image at a time
+       │    _read_slides(paths)    images → Tesseract ara+eng --psm 6
+       │         │                 videos → faster-whisper, max 5 per post
        │         │
        │    format_carousel_note() Caption → ## Slides → ### Slide N
        │         │
@@ -84,13 +85,15 @@ URL
 **`inbox.py`** — append-only writer for the hub's `system/inbox.md` queue. `log_video(note_stem, url, context)`, `log_file(file_name, context)`, `log_thought(text)`, and `log_failed(url, context, stage, error)` (appends to `system/skipped.md`, same format `batch_ingest.py` uses, so live-bot and batch failures share one review list). Items append under a `## YYYY-MM-DD` date heading (created with the day's first capture). One line per item: `- [YYYY-MM-DD HH:MM] KIND [[wikilink]] · [source](url) · "context" · #unsorted` (THOUGHT has no wikilink/source; empty segments omitted; internal newlines collapse to ` ⏎ `). VIDEO wikilinks use the note stem without `.md`; FILE wikilinks keep the extension. Never edits or deletes existing lines — sorting later flips `#unsorted` → `#sorted`.
 
 **`pipeline/downloader.py`**
-- `download(url)` — yt-dlp video download. Downloads to `temp/` as `%(id)s.%(ext)s`. Caps at 720p mp4. Applies Instagram/Facebook cookies via `_apply_ig_cookies()` (uses `GALLERY_DL_COOKIES` Firefox profile).
+- `download(url)` — yt-dlp video download. Downloads to `temp/` as `%(id)s.%(ext)s`. Caps at 720p mp4. Applies Instagram/Facebook cookies via `_apply_ig_cookies()` (uses `GALLERY_DL_COOKIES` Firefox profile). Resolves the written file through `_resolve_download()` and raises if nothing landed on disk — it never returns a path it hasn't checked exists.
+- `_resolve_download(info)` — returns `(path, node)`, searching `requested_downloads` on the top-level info **and on every entry**. Playlists carry no top-level download, and `prepare_filename()` on one invents `<id>.NA`; returning that fake path is what cost a capture on 2026-09-04, surfacing three stages later as `transcription: No such file`.
 - `download_images(url)` — gallery-dl carousel download. **Anonymous-first, cookies only as fallback** (`_gallery_dl_into()` helper; mirrors `download()`): tries with no cookies, and only retries with `_cookie_args()` into a fresh dir if the anonymous attempt yields no images — sending cookies on every request is what got the burner account flagged as bot activity. Creates a unique `temp/carousel_<uuid8>/` per run. Reads per-slide `.json` metadata files; sorts slides by `num` field. Returns `image_paths`, `caption`, `creator`, `slide_count`.
-- `is_video_post(url)` — reel-vs-carousel detector for IG/FB. `/reel/` in URL → True instantly. Otherwise runs a yt-dlp metadata probe (`download=False`): ≥1 entry → video, 0 entries or raises → carousel (gallery-dl handles it).
+- `is_video_post(url)` — reel-vs-carousel detector for IG/FB. `/reel/` in URL → True instantly. Otherwise runs a yt-dlp metadata probe (`download=False`): non-playlist or a playlist of **exactly one** entry → video; **two or more entries** → carousel (gallery-dl handles it); 0 entries or raises → carousel. The multi-entry rule matters: those posts are carousels that happen to contain a video slide, and `noplaylist` downloads none of them.
 - `_detect_platform(url)` — hostname substring match; unknown → `"unknown"`.
 - `_apply_ig_cookies(opts, url)` — injects `cookiesfrombrowser` tuple into yt-dlp opts only for IG/FB. YouTube/TikTok unaffected.
 
 **`pipeline/transcriber.py`**
+- `_has_audio_stream(path)` gates the transcribe call via `ffprobe`; a file with no audio stream raises `NoAudioError("no audio track")`. faster-whisper reports that case as `tuple index out of range`, which sent a capture to skipped.md on 2026-08-21 with no usable clue. Instagram carousel video slides are frequently muted, so this is the common case, not an exotic one. `ffprobe` missing → returns `None` and transcription proceeds as before.
 - Loads `WhisperModel` inside the function and explicitly `del`s it after the generator is consumed — keeps peak RAM bounded.
 - Generator must be fully materialized into a list **before** `del model`; consuming it after causes a CTranslate2 fault.
 - Passes `config.WHISPER_LANGUAGE` to `model.transcribe()` — `None` = auto-detect, ISO code (e.g. `"ar"`) = forced.
@@ -104,20 +107,22 @@ URL
 - `parse_document(url)` — MarkItDown converts articles, PDFs, and web pages. Uses `result.markdown` and `result.title`. Returns `platform="document"` dict.
 
 **`pipeline/formatter.py`**
-- `format_note(meta, transcription=None)` — handles video and document. Documents: no Duration, `## Content`. Videos: Duration + `## Transcript` + `## Caption`.
-- `format_carousel_note(meta, slides)` — carousel only. Header with `Slides:` count → `## Caption` → `## Slides` with `### Slide N` subsections. Empty slides render `_No text on this slide._`.
+- `format_note(meta, transcription=None)` — handles video and document. Documents: no Duration, `## Content`. Videos: Duration + `## Transcript` + `## Caption`. An empty transcript renders `_No speech detected._`, or `_Transcription failed: <error>_` when the transcription dict carries an `error` — a crashed transcriber and a silent clip used to look identical.
+- `format_carousel_note(meta, slides)` — carousel only. Header with `Slides:` count → `## Caption` → `## Slides` with `### Slide N` subsections; a video slide is headed `### Slide N (video)`. Empty slides render the slide's `note` if it has one, else `_No speech on this slide._` (video) / `_No text on this slide._` (image).
 - `format_photo_note(image_name, ocr_text, caption)` — for a photo sent straight to the bot. Embeds `![[assets/<image>]]` + `## Text (OCR)`. Title prefers the caption, else the first OCR line with real words, else `Photo`.
 
 **`capture.py`**
 - `_make_filename(meta)` — slug + id for all three types: video uses yt-dlp video ID stem, carousel uses post shortcode (extracted from URL), document uses 8-char URL SHA1 hash.
-- `_capture_carousel()` — runs download → OCR (non-fatal, degrades to empty slides) → format → write, with `shutil.rmtree(image_dir)` in `finally`.
-- All three `_capture_*` helpers use `_write_note()` (shared RAW_FOLDER write) and raise `CaptureError(stage, e)` per stage.
+- `_read_slides(paths)` — reads every carousel slide by type: images through `ocr_images()`, videos through `transcribe()`. gallery-dl returns both from one post, and OCR on an `.mp4` simply fails, so an all-video carousel used to render as N empty slides. At most `VIDEO_SLIDE_LIMIT` (5) video slides are transcribed; the rest are listed but not read, to keep a long carousel off the 8GB server for minutes.
+- `_capture_carousel()` — runs download → `_read_slides()` (non-fatal, degrades to empty slides) → format → write, with `shutil.rmtree(image_dir)` in `finally`.
+- All three `_capture_*` helpers use `_write_note()` (shared RAW_FOLDER write) and raise `CaptureError(stage, e)` per stage — **except transcription, which is deliberately non-fatal**: a failed transcript keeps the note (title, creator, caption, URL are still enough to sort from) instead of discarding a download that worked.
 - `capture_photo(image_path, caption)` — OCRs a photo already saved in `raw/assets/` and writes a note (`raw/<image-stem>.md`) embedding the image + its OCR text. Called by `bot.py` for photo attachments; raises on failure so the bot falls back to a plain saved-file line.
 
 **`bot.py`**
 - Whitelist: every handler starts with `_authorized(update)` — only `TELEGRAM_ALLOWED_USER_ID` gets a response; everyone else is silently ignored. Bot refuses to start if the ID is unset.
 - Text without a URL → `inbox.log_thought()` (verbatim THOUGHT line). Text with a URL → capture; on success `inbox.log_video()` with the non-URL remainder of the message as context. On any failure → `_save_failure()` → `inbox.log_failed()` (skipped.md) so the link is never lost; the thought and queue writes are also wrapped so a disk hiccup can't silently drop them.
-- Attachments are saved to `RAW_FOLDER/assets/` first (largest photo rendition; sanitized document filename; collision-suffixed with `file_unique_id`) — so the binary is never lost — then: **photos** are OCR'd via `capture_photo()` into a raw note (falls back to a plain FILE line if OCR fails); **documents/PDFs** get a plain `inbox.log_file()` line (parsing big/scanned PDFs is slow/failure-prone, left on-demand).
+- **`_tell()` wraps every Telegram write, and never raises.** Talking to Telegram is the one step that can fail *after* the capture is safe on disk, so it must never be reported as a capture failure. It used to share a `try` with the inbox append, which logged three finished captures to skipped.md as `inbox:` failures on a plain network blip (2026-08-12, 08-19, 09-04) and made Nour re-send one — that duplicate is still in the inbox. Each stage now reports on its own, and only the stage that actually failed writes to skipped.md.
+- Attachments are saved to `RAW_FOLDER/assets/` first (largest photo rendition; sanitized document filename; collision-suffixed with `file_unique_id`) — so the binary is never lost — then: **photos** are OCR'd via `capture_photo()` into a raw note (falls back to a plain FILE line if OCR fails); **documents/PDFs** get a plain `inbox.log_file()` line (parsing big/scanned PDFs is slow/failure-prone, left on-demand). The queue write happens **once**, after OCR either way — it used to sit inside the same `try` as the reply, so a failed reply fell into the fallback branch and logged a second FILE line for the same image.
 - `capture_lock = asyncio.Lock()` enforces sequential processing.
 - `loop.run_in_executor(None, capture, url)` keeps the event loop responsive.
 - Status messages edited in-place (⏳ → ✅/❌).
