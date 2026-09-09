@@ -399,4 +399,13 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    # A Windows console defaults to a legacy codepage (cp1256 on Nour's laptop),
+    # and this script prints `→` before it does any work — so it died at the
+    # dry-run summary with a UnicodeEncodeError until PYTHONIOENCODING was set by
+    # hand every time. Force UTF-8 here instead of remembering.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8")
+        except (AttributeError, OSError):
+            pass
     main()
